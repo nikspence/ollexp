@@ -1,40 +1,58 @@
 # ollexp
 
-Export a locally installed Ollama model to a directory containing its blobs and an updated `Modelfile`.
+`ollexp.py` exports an installed Ollama model to a self-contained directory. It copies the local files referenced by the model's `Modelfile` and rewrites those references so the exported model can be recreated with Ollama.
 
 ## Requirements
 
 - Python 3.8 or newer.
-- Ollama installed and available as `ollama` on your PATH.
-- The model already available in Ollama, with its blob files accessible on the machine running this script.
-- Enough free disk space for a copy of the model's referenced blobs.
+- Ollama installed with `ollama` available on `PATH`.
+- The model already installed in Ollama.
+- Local read access to the files referenced by the model's `FROM` and `ADAPTER` directives.
+- Enough free disk space for copies of those files.
 
-No third-party Python packages are needed. 
+`ollexp.py` uses only the Python standard library. No third-party packages are required.
 
 ## Usage
 
-Run without arguments to open the interactive export menu:
+### Interactive menu
 
-```sh
+Run the script without arguments:
+
+```powershell
 python ollexp.py
 ```
 
-Use Up/Down to select a model from `ollama list`. Tab cycles between the model
-list, base export directory, and model export subdirectory. The base defaults to
-the current directory; selecting a model resets the subdirectory to its sanitized
-name. Type to append to a directory field, Backspace to delete, or Ctrl+U to clear
-it. Enter exports to the base directory joined with the subdirectory and exits.
-Esc or Ctrl+C cancels. The menu requires an interactive terminal.
+The menu lists installed models from `ollama list`.
 
-```sh
+| Key | Action |
+| --- | --- |
+| Up / Down | Select a model when the model list is focused |
+| R | Remove the selected model when the model list is focused |
+| Tab | Cycle through the model list, base export directory, and model export subdirectory |
+| Typing | Append to the active directory field |
+| Backspace | Delete the previous character |
+| Ctrl+U | Clear the active directory field |
+| Enter | Export and exit |
+| Esc / Ctrl+C | Cancel |
+
+The base directory defaults to the current working directory. The subdirectory defaults to a filesystem-safe form of the selected model name and is updated when the model selection changes.
+
+Press `R` while the model list is focused to remove the selected model. The menu asks for confirmation: press `Y` to run `ollama rm MODEL`, or press `N`, Enter, or Esc to cancel. If the last installed model is removed, the menu exits.
+
+The subdirectory must be relative and cannot contain `..`. The base directory may be relative or absolute. The menu requires an interactive terminal; otherwise, use the positional command.
+
+### Positional command
+
+```powershell
 python ollexp.py MODEL [DIRECTORY]
 ```
 
-`MODEL` is the Ollama model name, including an optional tag. `DIRECTORY` is optional; by default, the script creates a directory in the current working directory using a filesystem-safe version of the model name.
+- `MODEL` is an installed Ollama model name, including an optional tag.
+- `DIRECTORY` is optional. By default, the script creates a directory under the current directory using a sanitized model name.
 
 Export to the default directory:
 
-```sh
+```powershell
 python ollexp.py llama3.2:latest
 ```
 
@@ -46,36 +64,66 @@ llama3.2_latest/
     llama3.2_latest.gguf
 ```
 
-Export to a specified directory:
+Export to a specific directory:
 
-```sh
-python ollexp.py llama3.2:latest ./exports/llama
+```powershell
+python ollexp.py llama3.2:latest .\exports\llama
 ```
 
 Quote paths containing spaces:
 
-```sh
+```powershell
 python ollexp.py llama3.2:latest "C:\Model Exports\llama"
 ```
 
 Show command-line help:
 
-```sh
+```powershell
 python ollexp.py --help
 ```
 
 ## Export behavior
 
-The script runs `ollama show MODEL --modelfile`, finds local files referenced by `FROM` and `ADAPTER` directives, and copies each unique file into the destination. It rewrites those directives to paths relative to the exported `Modelfile`, such as:
+The script runs:
+
+```text
+ollama show MODEL --modelfile
+```
+
+It finds local files referenced by `FROM` and `ADAPTER` directives, copies each unique source file into the destination directory, and rewrites those directives to relative paths such as:
 
 ```text
 FROM ./llama3.2_latest.gguf
 ```
 
-When multiple unique blobs are referenced, filenames receive numbers starting at 1, for example `llama3.2_latest_1.gguf` and `llama3.2_latest_2.gguf`. Repeated references to the same file share one exported copy. Comments and triple-quoted template text are preserved.
+Additional Modelfile content, including comments and template text, is preserved.
 
-Characters such as `/` and `:` in model names become underscores in directory and blob filenames. Explicit destination paths are used as provided.
+When one unique source file is referenced, it is named `<model>.gguf`. When multiple unique files are referenced, they are numbered as `<model>_1.gguf`, `<model>_2.gguf`, and so on. Repeated references to the same source share one exported copy.
 
-The destination and missing parent directories are created automatically. Existing files with conflicting export names are never overwritten. If copying fails, files created by that export attempt are removed. Errors are printed to standard error and return exit code 1.
+For generated directory and file names, characters that are unsafe in filenames, such as `/` and `:`, are replaced with underscores. Windows reserved names are prefixed with an underscore. Explicit destination directories are not sanitized; they are expanded and resolved relative to the current directory.
 
-Blobs are copied byte for byte and given a `.gguf` extension; the script does not convert their contents or validate that they are GGUF files. It exports files referenced by the Modelfile, rather than every layer in Ollama's model storage. Blob paths must be accessible locally, including when Ollama is configured to use a remote server.
+## Safety and limitations
+
+- Removing a model with `R` is permanent and uses the `ollama rm` command.
+- The destination directory and missing parent directories are created automatically.
+- Existing files that conflict with the export names are not overwritten. The export stops with an error instead.
+- Files created by a failed export attempt are removed; pre-existing files and the destination directory are left in place.
+- Copied files are named with a `.gguf` extension. Their contents are not converted or checked to verify that they are valid GGUF files.
+- Only files referenced by `FROM` and `ADAPTER` are exported. Other layers in Ollama's internal model storage are not included.
+- Referenced blob paths must be available locally. Exporting from a remote Ollama server will fail if those paths do not exist on the machine running this script.
+
+## Exit codes
+
+| Code | Meaning |
+| --- | --- |
+| `0` | Export completed successfully |
+| `1` | An Ollama, file, or validation error occurred |
+| `130` | The export was cancelled with Ctrl+C or Esc |
+
+## Tests
+
+Run the unit tests from this directory:
+
+```powershell
+python -m unittest -v
+```

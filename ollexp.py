@@ -27,6 +27,18 @@ def list_models():
     return models
 
 
+def remove_model(model):
+    """Remove an installed model through Ollama's rm command."""
+    result = subprocess.run(
+        ['ollama', 'rm', model], capture_output=True, text=True,
+        encoding='utf-8', errors='replace', check=False,
+    )
+    if result.returncode:
+        message = (result.stderr.strip() or result.stdout.strip()
+                   or f'ollama exited with {result.returncode}')
+        raise ValueError(message)
+
+
 @contextmanager
 def terminal_input():
     """Enable immediate keyboard input and restore terminal settings on exit."""
@@ -84,50 +96,89 @@ def terminal_input():
 
 
 def select_export():
-    """Return the model and destination selected in the terminal menu."""
+    """Return a model export choice, or None if the last model was removed."""
     if not sys.stdin.isatty() or not sys.stdout.isatty():
         raise ValueError('The menu requires an interactive terminal. Use MODEL [DIRECTORY] instead.')
     models = list_models()
     selected = focus = 0
     fields = [str(Path.cwd()), safe_name(models[0])]
-    error = ''
+    confirming = False
+    message = ''
     with terminal_input() as read_key:
         sys.stdout.write('\x1b[?1049h\x1b[?25l')
         try:
             while True:
                 columns, rows = shutil.get_terminal_size((80, 24))
-                visible = max(1, rows - 10)
+                visible = max(1, rows - (12 if confirming else 10))
                 start = max(0, min(selected - visible // 2, len(models) - visible))
-                lines = ['Export an Ollama model',
-                         'Up/Down: model   Tab: next field   Enter: export   Esc/Ctrl+C: cancel', '']
+                lines = [
+                    'Export an Ollama model',
+                    'Up/Down: select model  Tab: select field  Enter: export model  R: remove model Esc/Ctrl+C: cancel/exit',
+                    '',
+                ]
                 for index in range(start, min(start + visible, len(models))):
                     marker = '>' if index == selected else ' '
                     lines.append(f'{marker} {models[index]}')
-                lines.append(f'  Model {selected + 1} of {len(models)}')
-                for index, label in enumerate(('Base export directory', 'Model export subdirectory'), 1):
-                    marker = '>' if focus == index else ' '
-                    lines.append(f'{marker} {label}: {fields[index - 1]}')
-                lines.extend(['Type to edit; Backspace removes; Ctrl+U clears the active field.', error])
+                lines.append('')
+                if confirming:
+                    lines.extend([
+                        '',
+                        f"Remove model '{models[selected]}'?",
+                        'Press Y to confirm; N, Enter, or Esc to cancel.',
+                        message,
+                    ])
+                else:
+                    for index, label in enumerate(
+                            ('Base export directory', 'Model export subdirectory'), 1):
+                        marker = '>' if focus == index else ' '
+                        lines.append(f'{marker} {label}: {fields[index - 1]}')
+                    lines.extend([
+                        '',
+                        'Type to edit; Backspace removes; Ctrl+U clears the active field.',
+                        message,
+                    ])
                 # Strip control characters from external names and clip to avoid wrapping.
                 display = [''.join(c for c in line if c.isprintable())[:max(1, columns - 1)]
                            for line in lines]
                 sys.stdout.write('\x1b[H\x1b[2J' + '\r\n'.join(display))
                 sys.stdout.flush()
                 key = read_key()
-                error = ''
-                if key in ('\x03', '\x1b'):
+                message = ''
+                if key == '\x03':
+                    raise KeyboardInterrupt
+                if confirming:
+                    if key in ('y', 'Y'):
+                        model = models[selected]
+                        try:
+                            remove_model(model)
+                        except (OSError, ValueError) as error:
+                            message = f"Could not remove '{model}': {error}"
+                        else:
+                            models.pop(selected)
+                            if not models:
+                                return None
+                            selected = min(selected, len(models) - 1)
+                            fields[1] = safe_name(models[selected])
+                            message = f"Removed '{model}'."
+                        confirming = False
+                    elif key in ('n', 'N', '\r', '\n', '\x1b'):
+                        confirming = False
+                    continue
+                if key == '\x1b':
                     raise KeyboardInterrupt
                 if key == '\t':
                     focus = (focus + 1) % 3
                 elif key in ('UP', 'DOWN') and focus == 0:
                     selected = (selected + (1 if key == 'DOWN' else -1)) % len(models)
                     fields[1] = safe_name(models[selected])
+                elif key.lower() == 'r' and focus == 0:
+                    confirming = True
                 elif key in ('\r', '\n'):
                     subdirectory = Path(fields[1])
                     if not fields[0].strip() or not fields[1].strip():
-                        error = 'Both directory fields are required.'
+                        message = 'Both directory fields are required.'
                     elif subdirectory.is_absolute() or subdirectory.drive or '..' in subdirectory.parts:
-                        error = 'Use a relative subdirectory within the base export directory.'
+                        message = 'Use a relative subdirectory within the base export directory.'
                     else:
                         return models[selected], Path(fields[0]).expanduser() / subdirectory
                 elif focus:
@@ -241,7 +292,11 @@ def main():
     )
     try:
         if len(sys.argv) == 1:
-            model, directory = select_export()
+            selection = select_export()
+            if selection is None:
+                print('No installed models remain.')
+                return 0
+            model, directory = selection
         else:
             args = parser.parse_args()
             model, directory = args.model, args.directory
