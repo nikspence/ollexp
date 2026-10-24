@@ -218,7 +218,7 @@ def blob_references(modelfile):
             continue
         if line.lstrip().startswith('#'):
             continue
-        match = re.match(r'^(\s*)(FROM|ADAPTER)\s+(.+?)\s*$', line, re.I)
+        match = re.match(r'^(\s*)(FROM|ADAPTER|DRAFT)\s+(.+?)\s*$', line, re.I)
         if match:
             value = match.group(3)
             if len(value) >= 2 and value[0] == value[-1] and value[0] in '\"\'':

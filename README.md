@@ -1,13 +1,13 @@
 # ollexp
 
-`ollexp.py` exports an installed Ollama model to a self-contained directory. It copies the local files referenced by the model's `Modelfile` and rewrites those references so the exported model can be recreated with Ollama.
+`ollexp.py` exports an installed Ollama model to a self-contained directory. It copies the local files referenced by the model's `Modelfile` and rewrites those references so the exported model can be recreated with `ollama create`. This is especially handy for copying models to a computer running Ollama that has limited or no Internet access.
 
 ## Requirements
 
 - Python 3.8 or newer.
 - Ollama installed with `ollama` available on `PATH`.
 - The model already installed in Ollama.
-- Local read access to the files referenced by the model's `FROM` and `ADAPTER` directives.
+- Local read access to the files referenced by the model's `FROM`, `ADAPTER`, and `DRAFT` directives.
 - Enough free disk space for copies of those files.
 
 `ollexp.py` uses only the Python standard library. No third-party packages are required.
@@ -90,7 +90,7 @@ The script runs:
 ollama show MODEL --modelfile
 ```
 
-It finds local files referenced by `FROM` and `ADAPTER` directives, copies each unique source file into the destination directory, and rewrites those directives to relative paths such as:
+It finds local files referenced by `FROM`, `ADAPTER`, and `DRAFT` directives, copies each unique source file into the destination directory, and rewrites those directives to relative paths such as:
 
 ```text
 FROM ./llama3.2_latest.gguf
@@ -108,8 +108,8 @@ For generated directory and file names, characters that are unsafe in filenames,
 - The destination directory and missing parent directories are created automatically.
 - Existing files that conflict with the export names are not overwritten. The export stops with an error instead.
 - Files created by a failed export attempt are removed; pre-existing files and the destination directory are left in place.
-- Copied files are named with a `.gguf` extension. Their contents are not converted or checked to verify that they are valid GGUF files.
-- Only files referenced by `FROM` and `ADAPTER` are exported. Other layers in Ollama's internal model storage are not included.
+- Copied files are named with a `.gguf` extension. Their contents are not converted or checked to verify that they are valid GGUF files. Multimodal and Draft files are not named with mmproj or dspark but will reimport with the exported `Modelfile`.
+- Only files referenced by `FROM`, `ADAPTER`, and `DRAFT` are exported. Other layers in Ollama's internal model storage are not included.
 - Referenced blob paths must be available locally. Exporting from a remote Ollama server will fail if those paths do not exist on the machine running this script.
 
 ## Exit codes

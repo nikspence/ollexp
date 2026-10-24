@@ -114,5 +114,41 @@ class MenuTests(unittest.TestCase):
             self.assertEqual((target / 'Modelfile').read_text(), 'FROM ./first_tag.gguf\n')
 
 
+class DraftExportTests(unittest.TestCase):
+    def test_export_copies_draft_and_preserves_text(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            model = root / 'model blob'
+            draft = root / 'draft blob'
+            model.write_bytes(b'model data')
+            draft.write_bytes(b'draft data')
+            extra = '# DRAFT ignored\nTEMPLATE """\nDRAFT template text\n"""\n'
+            modelfile = f'FROM "{model}"\n  draft "{draft}"\nADAPTER "{draft}"\n' + extra
+            result = subprocess.CompletedProcess([], 0, modelfile, '')
+            target = root / 'export'
+            with patch('ollexp.subprocess.run', return_value=result):
+                destination, count = ollexp.export_model('example:tag', target)
+            self.assertEqual((destination, count), (target.resolve(), 2))
+            self.assertEqual((target / 'example_tag_1.gguf').read_bytes(), b'model data')
+            self.assertEqual((target / 'example_tag_2.gguf').read_bytes(), b'draft data')
+            self.assertEqual((target / 'Modelfile').read_text(),
+                             'FROM ./example_tag_1.gguf\n'
+                             '  draft ./example_tag_2.gguf\n'
+                             'ADAPTER ./example_tag_2.gguf\n' + extra)
+
+    def test_missing_draft_fails_before_creating_export(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            model = root / 'model'
+            model.write_bytes(b'model data')
+            result = subprocess.CompletedProcess(
+                [], 0, f'FROM "{model}"\nDRAFT "{root / "missing"}"\n', '')
+            target = root / 'export'
+            with patch('ollexp.subprocess.run', return_value=result):
+                with self.assertRaisesRegex(ValueError, 'DRAFT does not reference'):
+                    ollexp.export_model('example', target)
+            self.assertFalse(target.exists())
+
+
 if __name__ == '__main__':
     unittest.main()
