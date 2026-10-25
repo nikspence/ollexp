@@ -1,6 +1,6 @@
 # ollexp
 
-`ollexp.py` exports an installed Ollama model to a self-contained directory. It copies the local files referenced by the model's `Modelfile` and rewrites those references so the exported model can be recreated with `ollama create`. This is especially handy for copying models to a computer running Ollama that has limited or no Internet access.
+`ollexp.py` exports an installed Ollama model to a self-contained directory. It copies the local files referenced by the model's `Modelfile` and rewrites those references so the exported model can be recreated with `ollama create`. This is especially useful for copying models to a computer running Ollama that has limited or no Internet access.
 
 ## Requirements
 
@@ -28,14 +28,19 @@ The menu lists installed models from `ollama list`.
 | --- | --- |
 | Up / Down | Select a model when the model list is focused |
 | R | Remove the selected model when the model list is focused |
+| Q | Quit when the model list is focused |
 | Tab | Cycle through the model list, base export directory, and model export subdirectory |
 | Typing | Append to the active directory field |
 | Backspace | Delete the previous character |
 | Ctrl+U | Clear the active directory field |
-| Enter | Export and exit |
+| Enter | Review export details and confirm |
 | Esc / Ctrl+C | Cancel |
 
 The base directory defaults to the current working directory. The subdirectory defaults to a filesystem-safe form of the selected model name and is updated when the model selection changes.
+
+Press Enter to review the model name, size of the unique files to copy, full destination path, and free disk space on the destination drive. For a destination that does not exist yet, free space is checked using its nearest existing parent directory. Press `Y` or Enter to export, or `N` or Esc to cancel and return to the menu. No export files or directories are created before confirmation.
+
+After exporting, the menu returns to the model list with a completion message, keeping your selection and directory fields. Export errors also return to the list with an error message. Press `Q` or `q` from the model list to exit. In directory fields, these keys enter text normally.
 
 Press `R` while the model list is focused to remove the selected model. The menu asks for confirmation: press `Y` to run `ollama rm MODEL`, or press `N`, Enter, or Esc to cancel. If the last installed model is removed, the menu exits.
 
@@ -116,7 +121,7 @@ For generated directory and file names, characters that are unsafe in filenames,
 
 | Code | Meaning |
 | --- | --- |
-| `0` | Export completed successfully |
+| `0` | Export completed successfully, or the menu was closed with Q or after removing the last model |
 | `1` | An Ollama, file, or validation error occurred |
 | `130` | The export was cancelled with Ctrl+C or Esc |
 

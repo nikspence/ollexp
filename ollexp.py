@@ -8,6 +8,7 @@ import re
 import shutil
 import subprocess
 import sys
+import textwrap
 
 
 def list_models():
@@ -96,31 +97,48 @@ def terminal_input():
 
 
 def select_export():
-    """Return a model export choice, or None if the last model was removed."""
+    """Run the interactive export menu until quit or the last model is removed."""
     if not sys.stdin.isatty() or not sys.stdout.isatty():
         raise ValueError('The menu requires an interactive terminal. Use MODEL [DIRECTORY] instead.')
     models = list_models()
     selected = focus = 0
     fields = [str(Path.cwd()), safe_name(models[0])]
     confirming = False
+    export_confirmation = None
     message = ''
     with terminal_input() as read_key:
         sys.stdout.write('\x1b[?1049h\x1b[?25l')
         try:
             while True:
                 columns, rows = shutil.get_terminal_size((80, 24))
-                visible = max(1, rows - (12 if confirming else 10))
+                visible = max(1, rows - (13 if confirming else 11))
                 start = max(0, min(selected - visible // 2, len(models) - visible))
                 lines = [
                     'Export an Ollama model',
-                    'Up/Down: select model  Tab: select field  Enter: export model  R: remove model Esc/Ctrl+C: cancel/exit',
+                    'Up/Down: model  Tab: field  Enter: export  R: remove  Q: quit',
+                    'Esc/Ctrl+C: cancel/exit',
                     '',
                 ]
                 for index in range(start, min(start + visible, len(models))):
                     marker = '>' if index == selected else ' '
                     lines.append(f'{marker} {models[index]}')
                 lines.append('')
-                if confirming:
+                if export_confirmation is not None:
+                    destination, size, free = export_confirmation
+                    lines = [
+                        'Confirm model export',
+                        '',
+                        f'Model: {models[selected]}',
+                        f'Model size (files to copy): {format_size(size)}',
+                        f'Destination: {destination}',
+                        f'Free disk space at destination: {format_size(free)}',
+                        '',
+                        'Press Y or Enter to export; N or Esc to cancel.',
+                    ]
+                    lines = [part for line in lines for part in
+                             (textwrap.wrap(line, max(1, columns - 1),
+                                            replace_whitespace=False) or [''])]
+                elif confirming:
                     lines.extend([
                         '',
                         f"Remove model '{models[selected]}'?",
@@ -146,6 +164,23 @@ def select_export():
                 message = ''
                 if key == '\x03':
                     raise KeyboardInterrupt
+                if export_confirmation is not None:
+                    if key in ('y', 'Y', '\r', '\n'):
+                        model = models[selected]
+                        sys.stdout.write('\x1b[H\x1b[2JExporting model...')
+                        sys.stdout.flush()
+                        try:
+                            destination, count = export_model(model, export_confirmation[0])
+                        except (OSError, ValueError) as error:
+                            message = f"Could not export '{model}': {error}"
+                        else:
+                            message = f'Exported {count} blob(s) and Modelfile to {destination}'
+                        export_confirmation = None
+                        focus = 0
+                    if key in ('n', 'N', '\x1b'):
+                        export_confirmation = None
+                        message = 'Export cancelled.'
+                    continue
                 if confirming:
                     if key in ('y', 'Y'):
                         model = models[selected]
@@ -156,7 +191,7 @@ def select_export():
                         else:
                             models.pop(selected)
                             if not models:
-                                return None
+                                return 'No installed models remain.'
                             selected = min(selected, len(models) - 1)
                             fields[1] = safe_name(models[selected])
                             message = f"Removed '{model}'."
@@ -166,6 +201,8 @@ def select_export():
                     continue
                 if key == '\x1b':
                     raise KeyboardInterrupt
+                if key.lower() == 'q' and focus == 0:
+                    return None
                 if key == '\t':
                     focus = (focus + 1) % 3
                 elif key in ('UP', 'DOWN') and focus == 0:
@@ -180,7 +217,13 @@ def select_export():
                     elif subdirectory.is_absolute() or subdirectory.drive or '..' in subdirectory.parts:
                         message = 'Use a relative subdirectory within the base export directory.'
                     else:
-                        return models[selected], Path(fields[0]).expanduser() / subdirectory
+                        try:
+                            destination = (Path(fields[0]).expanduser() / subdirectory).resolve()
+                            size, free = export_details(models[selected], destination)
+                        except (OSError, ValueError) as error:
+                            message = f'Could not prepare export: {error}'
+                        else:
+                            export_confirmation = destination, size, free
                 elif focus:
                     if key in ('\x08', '\x7f'):
                         fields[focus - 1] = fields[focus - 1][:-1]
@@ -236,7 +279,8 @@ def blob_references(modelfile):
     return references
 
 
-def export_model(model, destination=None):
+def read_modelfile(model):
+    """Get the installed model's exportable Modelfile from Ollama."""
     result = subprocess.run(
         ['ollama', 'show', model, '--modelfile'],
         capture_output=True, text=True, encoding='utf-8', errors='replace',
@@ -244,8 +288,35 @@ def export_model(model, destination=None):
     )
     if result.returncode:
         raise ValueError(result.stderr.strip() or f'ollama exited with {result.returncode}')
+    return result.stdout
 
-    references = blob_references(result.stdout)
+
+def format_size(size):
+    """Show readable binary units and the exact byte count."""
+    amount = float(size)
+    for unit in ('B', 'KiB', 'MiB', 'GiB', 'TiB', 'PiB'):
+        if amount < 1024 or unit == 'PiB':
+            return f'{amount:.2f} {unit} ({size:,} bytes)'
+        amount /= 1024
+
+
+def export_details(model, destination):
+    """Inspect copy size and destination free space without creating anything."""
+    references = blob_references(read_modelfile(model))
+    sources = dict.fromkeys(source for _, _, _, source in references)
+    size = sum(source.stat().st_size for source in sources)
+    existing = Path(destination).expanduser().resolve()
+    while not existing.exists():
+        existing = existing.parent
+    if not existing.is_dir():
+        raise ValueError(f'Destination or parent is not a directory: {existing}')
+    return size, shutil.disk_usage(existing).free
+
+
+def export_model(model, destination=None):
+    modelfile = read_modelfile(model)
+
+    references = blob_references(modelfile)
     sources = list(dict.fromkeys(source for _, _, _, source in references))
     name = safe_name(model)
     destination = Path(destination) if destination is not None else Path.cwd() / name
@@ -254,7 +325,7 @@ def export_model(model, destination=None):
         source: f'{name}_{index}.gguf' if len(sources) > 1 else f'{name}.gguf'
         for index, source in enumerate(sources, 1)
     }
-    lines = result.stdout.splitlines(keepends=True)
+    lines = modelfile.splitlines(keepends=True)
     for index, indent, directive, source in references:
         lines[index] = f'{indent}{directive} ./{filenames[source]}\n'
 
@@ -292,11 +363,10 @@ def main():
     )
     try:
         if len(sys.argv) == 1:
-            selection = select_export()
-            if selection is None:
-                print('No installed models remain.')
-                return 0
-            model, directory = selection
+            message = select_export()
+            if message:
+                print(message)
+            return 0
         else:
             args = parser.parse_args()
             model, directory = args.model, args.directory
